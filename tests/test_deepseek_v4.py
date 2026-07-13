@@ -380,8 +380,8 @@ def test_deepseek_compile_builds_one_runtime_scalar_layer_callable(tmp_path, mon
     assert decode_args[decode_order.index("block_table")].shape == (8, 8, 128)
     assert decode_args[decode_order.index("idx_kv_cache")].dtype == torch.int8
     assert decode_args[decode_order.index("idx_kv_scale")].shape == (8, 21 * 8 * 64, 128, 1, 1)
-    # SWA metadata: full window (incl. current) for the SWA layer, history window
-    # (excludes current chunk) for HCA/CSA, plus the paged write slot mapping.
+    # SWA/HCA/CSA metadata all use the cache-first full window, plus the paged
+    # write slot mapping.
     assert decode_args[decode_order.index("swa_slot_mapping")].shape == (8, 8)
     assert decode_args[decode_order.index("swa_indices")].shape == (8, 8, 128)
     assert decode_args[decode_order.index("swa_lens")].shape == (8, 8)
@@ -881,11 +881,12 @@ def test_deepseek_prepare_decode_inputs_builds_sliding_window_metadata():
     # Paged write slot for the current token.
     assert prepared.swa_slot_mapping[0, 1].item() == 127
     assert prepared.swa_slot_mapping[0, 3].item() == 260
-    # History window excludes the current decode chunk positions.
-    assert prepared.window_swa_lens[0, 0].item() == 126
-    assert prepared.window_swa_lens[0, 1].item() == 126
-    assert prepared.window_swa_lens[0, 3].item() == 3
-    assert prepared.window_swa_indices[0, 3, :3].tolist() == [256, 257, 258]
+    # HCA/CSA follow pypto-lib's cache-first contract: their window contains
+    # historical rows and the current decode position after KV writeback.
+    assert prepared.window_swa_lens[0, 0].item() == 127
+    assert prepared.window_swa_lens[0, 1].item() == 128
+    assert prepared.window_swa_lens[0, 3].item() == 5
+    assert prepared.window_swa_indices[0, 3, :5].tolist() == [256, 257, 258, 259, 260]
 
 
 def test_deepseek_prepare_decode_inputs_feeds_two_real_tokens():

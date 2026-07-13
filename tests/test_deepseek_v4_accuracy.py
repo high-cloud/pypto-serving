@@ -31,8 +31,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_ID = "dsv4-flash-w8a8"
 PROMPT = "Huawei is"
-MAX_NEW_TOKENS = 6
-EXPECTED_TEXT = " a leading global provider of ICT"
+MAX_NEW_TOKENS = 10
+EXPECTED_TEXT = " a leading global information and communications technology (ICT)"
 
 STARTUP_TIMEOUT_SECONDS = 600
 OVERALL_TIMEOUT_SECONDS = 1650

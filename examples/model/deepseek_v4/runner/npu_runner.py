@@ -550,18 +550,15 @@ class DeepSeekV4CacheManager:
         positions: Sequence[Sequence[int]],
         *,
         kernel_rows: int,
-        exclude_current: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Lower each decode SWA window to physical KV-cache row indices.
 
-        Mirrors pypto-lib ``decode_metadata.swa_indices_and_lens`` (and, when
-        ``exclude_current`` is set, ``history_window_swa_indices_and_lens``): each
-        visible absolute position in ``[max(0, pos - window + 1), pos]`` is
-        translated through the same paged ring block table as the write path.
-        Rows are packed oldest-to-newest; invalid tail columns are ``-1`` and the
-        returned lens give the valid prefix length. When ``exclude_current`` is
-        set the positions in the current decode chunk are dropped (HCA/CSA attend
-        those through their raw-index overlay instead).
+        Mirrors pypto-lib ``decode_metadata.swa_indices_and_lens``: each visible
+        absolute position in ``[max(0, pos - window + 1), pos]`` is translated
+        through the same paged ring block table as the write path. Rows are packed
+        oldest-to-newest; invalid tail columns are ``-1`` and the returned lens give
+        the valid prefix length. HCA/CSA use this same full-window cache-first
+        contract: their current-chunk KV rows are written before sparse attention.
         """
         window = int(self.layout.sliding_window)
         ring = int(self.layout.decode_ori_max_blocks)
@@ -574,17 +571,12 @@ class DeepSeekV4CacheManager:
         indices = torch.full((total, window), -1, dtype=torch.int32)
         lens = torch.zeros((total,), dtype=torch.int32)
         for row_idx, (slot, row_positions) in enumerate(rows):
-            # HCA/CSA exclude only the current decode-chunk positions from the
-            # historical window; the SWA layer includes the full window.
-            overlay = {int(p) for p in row_positions} if exclude_current else set()
             for s, position in enumerate(row_positions):
                 token = row_idx * per_row + s
                 abs_pos = int(position)
                 start = max(0, abs_pos - window + 1)
                 out_k = 0
                 for pos in range(start, abs_pos + 1):
-                    if pos in overlay:
-                        continue
                     logical_blk = pos // block_size
                     phys_blk = int(slot) * ring + (logical_blk % ring)
                     indices[token, out_k] = phys_blk * block_size + (pos % block_size)
@@ -1236,14 +1228,9 @@ class DeepSeekV4ModelRunner(ModelRunner):
             decode_positions,
             kernel_rows=layout.decode_batch,
         )
-        # HCA/CSA history window: excludes the current decode-chunk positions,
-        # which those layers attend through their raw-index overlay instead.
-        window_swa_indices, window_swa_lens = self.cache_manager.swa_window_indices_and_lens(
-            decode_slots,
-            decode_positions,
-            kernel_rows=layout.decode_batch,
-            exclude_current=True,
-        )
+        # HCA/CSA use the same cache-first full window as pypto-lib: the current
+        # decode-chunk KV rows are written to ori-KV before sparse attention.
+        window_swa_indices, window_swa_lens = swa_indices, swa_lens
         hca_cmp_slot_mapping = self.cache_manager.compressed_slot_mapping(
             decode_slots,
             decode_positions,
