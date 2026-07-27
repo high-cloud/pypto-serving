@@ -3657,8 +3657,9 @@ class DeepSeekV4ModelRunner(ModelRunner):
                         for block_id in block_ids:
                             flat_index = layer * blocks_per_layer + int(block_id)
                             page = host_tensor[rank, flat_index]
-                            worker.copy_to(
-                                shard.data_ptr + flat_index * page_nbytes,
+                            worker.copy_to_offset(
+                                shard.data_ptr,
+                                flat_index * page_nbytes,
                                 page.data_ptr(),
                                 page_nbytes,
                                 worker_id=worker_id,
