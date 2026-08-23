@@ -423,18 +423,6 @@ def prefill_task_args(runner: DeepSeekV4ModelRunner, hidden: int, vocab: int) ->
 _DECODE_STATIC_WEIGHTS = _PREFILL_STATIC_WEIGHTS
 _DECODE_CACHE_POOLS = _PREFILL_CACHE_POOLS
 
-_DECODE_STATIC_METADATA_FIELDS = (
-    "block_table",
-    "hca_cmp_block_table",
-    "csa_cmp_block_table",
-    "idx_block_table",
-    "hca_compress_state_block_table",
-    "csa_compress_state_block_table",
-    "csa_inner_compress_state_block_table",
-    "block_counts",
-)
-
-
 def _decode_slot_specs(layout, hidden: int, vocab: int) -> dict[str, tuple[torch.dtype, tuple[int, ...]]]:
     """Host-shared buffer name -> (dtype, full shape) owned by the decode TaskArgs.
 
@@ -486,12 +474,7 @@ def decode_task_args(
 
     ta = TaskArgs(stacked=True)
     for name in _DECODE_FWD_TENSOR_ORDER:
-        if runner._compiled.num_speculative_tokens == 1 and name in _DECODE_STATIC_METADATA_FIELDS:
-            ta.add_arg(
-                name,
-                lambda n=name, slot=buffer_slot: runner._materialize_decode_device_metadata(slot)[n],
-            )
-        elif name in slot_specs:
+        if name in slot_specs:
             dtype, shape = slot_specs[name]
             placement = (
                 Placement.DEVICE_RESIDENT
@@ -675,18 +658,10 @@ def mtp_decode_task_args(
         elif name == "main_pre_hc_hidden":
             ta.add_arg(name, lambda: runner._materialize_main_pre_hc_device(hidden))
         elif name == "ori_block_table":
-            if runner._compiled.num_speculative_tokens == 1:
-                ta.add_arg(
-                    name,
-                    lambda slot=buffer_slot: runner._materialize_decode_device_metadata(slot)[
-                        "block_table"
-                    ],
-                )
-            else:
-                ta.add_arg(
-                    name,
-                    lambda slot=buffer_slot: runner._decode_task_args[slot].tensors["block_table"],
-                )
+            ta.add_arg(
+                name,
+                lambda slot=buffer_slot: runner._decode_task_args[slot].tensors["block_table"],
+            )
         else:
             ta.add_arg(
                 name,
