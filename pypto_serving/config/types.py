@@ -17,6 +17,9 @@ import torch
 from pypto_serving.model.tokenizer import TokenizerAdapter
 
 
+GREEDY_TEMPERATURE_THRESHOLD = 1e-5
+
+
 @dataclass(frozen=True)
 class GenerateConfig:
     """User-facing options that control text generation."""
@@ -316,7 +319,9 @@ class DecodeBatch:
     hidden_states: torch.Tensor | None
     seq_lens: torch.Tensor
     allow_device_greedy_sampling: bool = False
+    allow_device_temperature_sampling: bool = False
     allow_device_topk_sampling: bool = False
+    sampling_params: list[SamplingParams] = field(default_factory=list)
     kv_allocations: list[KvAllocation] = field(default_factory=list)
     block_ids: list[list[int]] = field(default_factory=list)
     block_ids_by_group: list[dict[str, list[int]]] = field(default_factory=list)

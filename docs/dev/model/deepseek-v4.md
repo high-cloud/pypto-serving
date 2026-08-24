@@ -100,6 +100,13 @@ respectively. Non-MTP decode retains B8S1T8. The deprecated
 `--num-speculative-tokens K` and `--enable-mtp`
 flags remain compatibility aliases; `--enable-mtp` selects K=1.
 
+The fused K=1 decode path uses greedy sampling when `temperature < 1e-5` and
+full-vocabulary temperature sampling otherwise (`top_p=1` and no positive
+`top_k`). Temperature sampling is implemented by the device-side Gumbel-max
+sampler. Requests sharing one DP rank in the same decode step must use the
+same sampling temperature. Deeper standalone MTP configurations remain
+greedy-only.
+
 The main prefill kernel supports a dynamic request extent up to 8192 tokens and
 walks it internally in 128-token tiles. AR and MTP use the same main-prefill
 request limit; the effective dispatch extent is the minimum of 8192,

@@ -69,6 +69,7 @@ _DEEPSEEK_V4_IMPORT_MODULES = (
     "hc_post",
     "hc_pre",
     "lm_head",
+    "sample",
     "prefill_csa",
     "prefill_hca",
     "prefill_swa",
@@ -219,6 +220,11 @@ class DeepSeekV4PyptoExecutor(CorePyptoExecutor):
     def supports_device_sampling(self) -> bool:
         """Enable executor-provided greedy token acceptance for MTP only."""
         return self._num_speculative_tokens > 0
+
+    @property
+    def supports_device_temperature_sampling(self) -> bool:
+        """Enable fused full-vocabulary Gumbel sampling for MTP decode."""
+        return self._num_speculative_tokens == 1
 
     @property
     def supports_device_decode_embedding(self) -> bool:

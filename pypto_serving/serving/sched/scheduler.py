@@ -15,6 +15,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
+from pypto_serving.config.types import GREEDY_TEMPERATURE_THRESHOLD
 from pypto_serving.serving.memory.kv_cache import KVCacheCapacityError, KvCacheManager
 
 logger = logging.getLogger(__name__)
@@ -283,7 +284,7 @@ class Scheduler:
             is_prefill = request.is_prefill
             speculative_tokens = (
                 self.config.num_speculative_tokens
-                if not is_prefill and request.temperature <= 0.0
+                if not is_prefill and self._supports_speculative_sampling(request)
                 else 0
             )
             scheduled_tokens = num_new + speculative_tokens
@@ -615,12 +616,21 @@ class Scheduler:
     ) -> int:
         """Extra tokens beyond the first that a sampling step may emit.
 
-        Mirrors the accounting ``schedule()`` uses when allocating blocks: only
-        greedy decode steps get speculative capacity.
+        Mirrors the accounting ``schedule()`` uses when allocating blocks.
         """
-        if scheduled.is_prefill or request.temperature > 0.0:
+        if scheduled.is_prefill or not self._supports_speculative_sampling(request):
             return 0
         return self.config.num_speculative_tokens
+
+    def _supports_speculative_sampling(self, request: "Request") -> bool:
+        """Return whether the fused MTP sampler implements this request config."""
+        if request.temperature < GREEDY_TEMPERATURE_THRESHOLD:
+            return True
+        return (
+            self.config.num_speculative_tokens == 1
+            and request.top_p >= 1.0
+            and (request.top_k is None or request.top_k <= 0)
+        )
 
     def update_from_output(
         self,

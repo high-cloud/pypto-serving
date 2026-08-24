@@ -24,6 +24,7 @@ import torch
 from pypto_serving.config.types import (
     DecodeBatch,
     DecodeResult,
+    GREEDY_TEMPERATURE_THRESHOLD,
     SamplingParams,
 )
 from pypto_serving.serving.utils.gc_utils import freeze_gc_heap
@@ -670,7 +671,10 @@ class WorkerProcess:
             block_ids_list = [pr.block_ids for pr in scheduled]
             allow_device_greedy_sampling = (
                 self.executor.supports_device_sampling
-                and all(self._req_cache[pr.request_id].temperature <= 0.0 for pr in scheduled)
+                and all(
+                    self._req_cache[pr.request_id].temperature < GREEDY_TEMPERATURE_THRESHOLD
+                    for pr in scheduled
+                )
             )
             allow_device_topk_sampling = self._allow_device_topk_sampling(scheduled)
             embedding_lookup = None
@@ -770,7 +774,13 @@ class WorkerProcess:
             buffer_slot = cmd.step_id % _DECODE_PIPELINE_SLOTS
         allow_device_greedy_sampling = (
             self.executor.supports_device_sampling
-            and all(self._req_cache[dr.request_id].temperature <= 0.0 for dr in cmd.decode_requests)
+            and all(
+                self._req_cache[dr.request_id].temperature < GREEDY_TEMPERATURE_THRESHOLD
+                for dr in cmd.decode_requests
+            )
+        )
+        allow_device_temperature_sampling = self._allow_device_temperature_sampling(
+            cmd.decode_requests
         )
         allow_device_topk_sampling = self._allow_device_topk_sampling(cmd.decode_requests)
         # Tokens remain placeholders during early preparation. Executors with a
@@ -781,6 +791,7 @@ class WorkerProcess:
             runtime_model,
             resolve_tokens=False,
             allow_device_greedy_sampling=allow_device_greedy_sampling,
+            allow_device_temperature_sampling=allow_device_temperature_sampling,
             allow_device_topk_sampling=allow_device_topk_sampling,
         )
         with profile_span(
@@ -802,6 +813,7 @@ class WorkerProcess:
         *,
         resolve_tokens: bool,
         allow_device_greedy_sampling: bool,
+        allow_device_temperature_sampling: bool,
         allow_device_topk_sampling: bool,
     ) -> DecodeBatch:
         """Build a decode batch snapshot, optionally resolving prior output tokens."""
@@ -824,7 +836,16 @@ class WorkerProcess:
                 [dr.seq_len for dr in scheduled], dtype=torch.int32, device=device
             ),
             allow_device_greedy_sampling=allow_device_greedy_sampling,
+            allow_device_temperature_sampling=allow_device_temperature_sampling,
             allow_device_topk_sampling=allow_device_topk_sampling,
+            sampling_params=[
+                SamplingParams(
+                    temperature=self._req_cache[dr.request_id].temperature,
+                    top_p=self._req_cache[dr.request_id].top_p,
+                    top_k=self._req_cache[dr.request_id].top_k,
+                )
+                for dr in scheduled
+            ],
             block_ids=[dr.block_ids for dr in scheduled],
             block_ids_by_group=[dr.block_ids_by_group for dr in scheduled],
             cache_partitions=[dr.cache_partition for dr in scheduled],
@@ -844,7 +865,13 @@ class WorkerProcess:
         ):
             allow_device_greedy_sampling = (
                 self.executor.supports_device_sampling
-                and all(self._req_cache[dr.request_id].temperature <= 0.0 for dr in scheduled)
+                and all(
+                    self._req_cache[dr.request_id].temperature < GREEDY_TEMPERATURE_THRESHOLD
+                    for dr in scheduled
+                )
+            )
+            allow_device_temperature_sampling = self._allow_device_temperature_sampling(
+                scheduled
             )
             allow_device_topk_sampling = self._allow_device_topk_sampling(scheduled)
 
@@ -853,6 +880,7 @@ class WorkerProcess:
                 runtime_model,
                 resolve_tokens=True,
                 allow_device_greedy_sampling=allow_device_greedy_sampling,
+                allow_device_temperature_sampling=allow_device_temperature_sampling,
                 allow_device_topk_sampling=allow_device_topk_sampling,
             )
             if prepared_decode is None:
@@ -880,7 +908,13 @@ class WorkerProcess:
             return
         allow_device_greedy_sampling = (
             self.executor.supports_device_sampling
-            and all(self._req_cache[dr.request_id].temperature <= 0.0 for dr in scheduled)
+            and all(
+                self._req_cache[dr.request_id].temperature < GREEDY_TEMPERATURE_THRESHOLD
+                for dr in scheduled
+            )
+        )
+        allow_device_temperature_sampling = self._allow_device_temperature_sampling(
+            list(scheduled)
         )
         allow_device_topk_sampling = self._allow_device_topk_sampling(list(scheduled))
         for i, dr in enumerate(scheduled):
@@ -902,7 +936,7 @@ class WorkerProcess:
                 logits,
                 params,
                 i,
-                allow_device_greedy_sampling,
+                allow_device_greedy_sampling or allow_device_temperature_sampling,
                 allow_device_topk_sampling=allow_device_topk_sampling,
             )
             new_tokens[dr.request_id] = [token_id]
@@ -947,11 +981,41 @@ class WorkerProcess:
         cached_requests = [self._req_cache[item.request_id] for item in scheduled]
         return (
             max_device_topk > 0
-            and all(request.temperature > 0.0 for request in cached_requests)
+            and all(request.temperature >= GREEDY_TEMPERATURE_THRESHOLD for request in cached_requests)
             and all(request.top_k is not None for request in cached_requests)
             and all(request.top_k > 0 for request in cached_requests)
             and all(request.top_k <= max_device_topk for request in cached_requests)
         )
+
+    def _allow_device_temperature_sampling(self, scheduled: list) -> bool:
+        """Return whether a batch fits the fused full-vocabulary device sampler."""
+        cached_requests = [self._req_cache[item.request_id] for item in scheduled]
+        if not getattr(self.executor, "supports_device_temperature_sampling", False):
+            return False
+        if not any(
+            request.temperature >= GREEDY_TEMPERATURE_THRESHOLD
+            for request in cached_requests
+        ):
+            return False
+        if not all(
+            request.temperature < GREEDY_TEMPERATURE_THRESHOLD
+            or (
+                request.top_p >= 1.0
+                and (request.top_k is None or request.top_k <= 0)
+            )
+            for request in cached_requests
+        ):
+            return False
+        configs_by_rank: dict[int, set[float]] = {}
+        for index, (item, request) in enumerate(zip(scheduled, cached_requests, strict=True)):
+            rank = item.cache_partition if item.cache_partition is not None else index
+            config = (
+                0.0
+                if request.temperature < GREEDY_TEMPERATURE_THRESHOLD
+                else request.temperature
+            )
+            configs_by_rank.setdefault(rank, set()).add(config)
+        return all(len(configs) == 1 for configs in configs_by_rank.values())
 
 
 def _worker_entry(

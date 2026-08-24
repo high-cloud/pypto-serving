@@ -40,6 +40,11 @@ class ModelExecutor(ABC):
         return False
 
     @property
+    def supports_device_temperature_sampling(self) -> bool:
+        """Return whether the executor can sample full-vocabulary temperature rows."""
+        return False
+
+    @property
     def device_topk_sampling_k(self) -> int:
         """Return the max top-k candidate width the executor can produce on device."""
         return 0

@@ -26,6 +26,7 @@ from pypto.runtime import DeviceTensor, StackedDeviceTensor
 from pypto_serving.config.types import (
     DecodeBatch,
     DecodeResult,
+    GREEDY_TEMPERATURE_THRESHOLD,
     KVCacheGroupSpec,
     KVCacheSpec,
     ModelConfig,
@@ -1663,8 +1664,7 @@ class DeepSeekV4ModelRunner(L3DispatchMixin, ModelRunner):
         assignment = self._decode_assignment(batch)
         fused_mtp = self._compiled.num_speculative_tokens == 1
         if fused_mtp:
-            if not batch.allow_device_greedy_sampling:
-                raise RuntimeError("DeepSeekV4 MTP decode currently requires greedy device sampling")
+            self._validate_fused_mtp_sampling(batch)
             for request_id, rank in zip(batch.request_ids, assignment.ranks, strict=True):
                 self._reserve_mtp_request_state(request_id, rank)
         actual_batch = len(batch.request_ids)
@@ -1876,6 +1876,7 @@ class DeepSeekV4ModelRunner(L3DispatchMixin, ModelRunner):
         )
         staged["num_tokens_per_owner"].zero_()
         staged["logit_row_indices"].fill_(-1)
+        self._stage_decode_sampling_controls(staged, batch, assignment=assignment)
         self._stage_decode_dynamic_inputs(
             staged,
             batch,
@@ -2060,6 +2061,60 @@ class DeepSeekV4ModelRunner(L3DispatchMixin, ModelRunner):
                     torch.tensor(positions[request_index], dtype=torch.int32)
                 )
                 staged["kv_seq_lens"][rank, local_row] = batch.seq_lens[request_index]
+
+    def _stage_decode_sampling_controls(
+        self,
+        staged: dict[str, torch.Tensor],
+        batch: DecodeBatch,
+        *,
+        assignment: _DeepSeekV4DecodeAssignment,
+    ) -> None:
+        """Stage per-logit-row greedy or full-vocabulary Gumbel controls."""
+        temperatures = staged["sampling_temperatures"]
+        seeds = staged["sampling_seeds"]
+        temperatures.zero_()
+        seeds.zero_()
+        if not batch.allow_device_temperature_sampling:
+            return
+        if len(batch.sampling_params) != len(batch.request_ids):
+            raise ValueError("temperature sampling params must align with decode requests")
+        width = self._compiled.layout.decode_seq
+        for rank, request_indices in enumerate(assignment.indices_by_rank):
+            for local_row, request_index in enumerate(request_indices):
+                params = batch.sampling_params[request_index]
+                if params.temperature < GREEDY_TEMPERATURE_THRESHOLD:
+                    continue
+                if params.top_p < 1.0 or (params.top_k is not None and params.top_k > 0):
+                    raise ValueError("DeepSeek device temperature sampling requires top_p=1 and no top_k")
+                row_start = local_row * width
+                row_end = row_start + width
+                temperatures[rank, row_start:row_end].fill_(float(params.temperature))
+
+    def _validate_fused_mtp_sampling(self, batch: DecodeBatch) -> None:
+        """Validate the sampling temperature supported by the fused K=1 MTP ABI."""
+        if batch.allow_device_greedy_sampling:
+            return
+        if not batch.allow_device_temperature_sampling:
+            raise RuntimeError(
+                "DeepSeekV4 fused MTP decode requires greedy sampling or "
+                "temperature sampling with top_p=1 and no top_k"
+            )
+        if len(batch.sampling_params) != len(batch.request_ids):
+            raise ValueError("temperature sampling params must align with decode requests")
+        temperatures_by_rank: dict[int, set[float]] = {}
+        for rank, params in zip(batch.cache_partitions, batch.sampling_params, strict=True):
+            if rank is None:
+                raise ValueError("DeepSeekV4 fused MTP temperature sampling requires cache partitions")
+            temperature = (
+                0.0
+                if params.temperature < GREEDY_TEMPERATURE_THRESHOLD
+                else float(params.temperature)
+            )
+            temperatures_by_rank.setdefault(int(rank), set()).add(temperature)
+        if any(len(temperatures) != 1 for temperatures in temperatures_by_rank.values()):
+            raise ValueError(
+                "DeepSeekV4 fused MTP requires one sampling temperature per DP rank"
+            )
 
     def _stage_decode_cache_metadata(
         self,
@@ -2564,8 +2619,7 @@ class DeepSeekV4ModelRunner(L3DispatchMixin, ModelRunner):
         """Prepare and run fused MTP device work for synchronous callers."""
         if self._compiled.num_speculative_tokens != 1:
             raise RuntimeError("split decode dispatch requires fused DeepSeekV4 K=1 MTP")
-        if not batch.allow_device_greedy_sampling:
-            raise RuntimeError("DeepSeekV4 MTP decode currently requires greedy device sampling")
+        self._validate_fused_mtp_sampling(batch)
         if prepared is None:
             with profile_span(
                 "DeepSeekV4ModelRunner.decode.prepare_inputs_fallback",
@@ -3378,6 +3432,10 @@ class DeepSeekV4ModelRunner(L3DispatchMixin, ModelRunner):
 
         self._require_mtp_buffers()
         mtp_slots = self._mtp_decode_task_args[0].tensors
+        # Arbitrary-depth MTP remains greedy-only, but the updated pypto-lib
+        # ABI still requires explicit sampling controls on every dispatch.
+        mtp_slots["sampling_temperatures"].zero_()
+        mtp_slots["sampling_seeds"].zero_()
         assignment = self._decode_assignment(batch)
         token_ids = token_ids.detach().cpu().to(torch.long).reshape(actual_batch)
         positions = positions.detach().cpu().to(torch.int32).reshape(actual_batch)

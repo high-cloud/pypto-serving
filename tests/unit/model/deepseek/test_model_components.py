@@ -293,6 +293,14 @@ def test_deepseek_mtp_token_step_runs_one_request_per_rank_wave(monkeypatch):
             (layout.ranks, layout.decode_tokens),
             dtype=torch.int32,
         ),
+        "sampling_temperatures": torch.empty(
+            (layout.ranks, layout.decode_tokens),
+            dtype=torch.float32,
+        ),
+        "sampling_seeds": torch.empty(
+            (layout.ranks, layout.decode_tokens),
+            dtype=torch.int32,
+        ),
     }
     runner._mtp_buffers = SimpleNamespace()
     runner._mtp_decode_task_args = [SimpleNamespace(tensors=mtp_slots)]
@@ -680,7 +688,7 @@ def test_cli_selects_deepseek_executor_and_configures_mtp_depth(tmp_path):
             "--speculative-config",
             '{"method":"mtp","num_speculative_tokens":4}',
             "--max-num-seqs",
-            "16",
+            "8",
             "--use-compile-cache",
         ]
     )
@@ -697,7 +705,7 @@ def test_cli_selects_deepseek_executor_and_configures_mtp_depth(tmp_path):
     assert config.runtime_config.num_speculative_tokens == 4
     assert config.runtime_config.max_prefill_tokens_per_request == 8192
     assert config.runtime_config.supports_chunked_prefill_with_speculation is True
-    assert config.max_num_running_reqs == 16
+    assert config.max_num_running_reqs == 8
     assert config.executor_kwargs["use_compile_cache"] is True
 
 

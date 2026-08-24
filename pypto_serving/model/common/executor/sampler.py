@@ -13,7 +13,12 @@ import warnings
 
 import torch
 
-from pypto_serving.config.types import GenerateConfig, SamplingCandidates, SamplingParams
+from pypto_serving.config.types import (
+    GREEDY_TEMPERATURE_THRESHOLD,
+    GenerateConfig,
+    SamplingCandidates,
+    SamplingParams,
+)
 
 
 class Sampler:
@@ -22,10 +27,10 @@ class Sampler:
     def sample(self, logits: torch.Tensor, params: SamplingParams) -> int:
         """Sample one token ID from logits using the supplied sampling params."""
         logits = self._sanitize_logits(logits)
-        if params.temperature <= 0.0:
+        if params.temperature < GREEDY_TEMPERATURE_THRESHOLD:
             return self._greedy_token(logits)
 
-        scaled = logits / max(params.temperature, 1e-5)
+        scaled = logits / params.temperature
 
         if params.top_k is not None and params.top_k > 0 and params.top_k < scaled.numel():
             topk_values, topk_indices = torch.topk(scaled, params.top_k)
@@ -79,10 +84,10 @@ class Sampler:
             width = min(width, params.top_k)
         values = self._sanitize_logits(values[:width])
         token_ids = token_ids[:width]
-        if params.temperature <= 0.0:
+        if params.temperature < GREEDY_TEMPERATURE_THRESHOLD:
             return int(token_ids[self._greedy_token(values)].item())
 
-        scaled = values / max(params.temperature, 1e-5)
+        scaled = values / params.temperature
         probs = torch.softmax(scaled, dim=-1)
         if not self._is_valid_distribution(probs):
             return int(token_ids[self._greedy_token(values)].item())
