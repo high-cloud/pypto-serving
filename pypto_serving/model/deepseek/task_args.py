@@ -653,8 +653,6 @@ def decode_task_args(
             ta.add_arg(name, lambda slot=buffer_slot: runner._prepare_moe_stats(slot + 1))
         elif name in static_weights:
             ta.add_arg(name, _static_weight_source(runner, name))
-        elif name == "moe_token_counts":
-            ta.add_arg(name, lambda: runner._prepare_moe_stats(0))
         elif name in cache_pools:
             ta.add_arg(name, lambda n=name: runner._device_cache_values()[n])
         else:
@@ -716,6 +714,8 @@ def mtp_prefill_task_args(runner: DeepSeekV4ModelRunner, hidden: int) -> TaskArg
             ta.add_slot(Slot(name, Placement.DEVICE_RESIDENT, dtype, lambda _, s=shape: s))
         elif name == "kv_cache":
             ta.add_arg(name, lambda: runner._materialize_mtp_device_kv_cache())
+        elif name == "moe_token_counts":
+            ta.add_arg(name, lambda: runner._prepare_moe_stats(0))
         elif name in static_weights:
             ta.add_arg(name, _static_weight_source(runner, name))
         else:

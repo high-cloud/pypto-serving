@@ -3669,12 +3669,14 @@ class DeepSeekV4ModelRunner(L3DispatchMixin, ModelRunner):
         staged.copy_(hidden.to(dtype=torch.float32, device="cpu"))
         pool = self._materialize_mtp_tail_pre_hc_pool(int(staged.shape[-1]))
         shard = pool.shards[rank]
-        row_nbytes = staged.numel() * staged.element_size()
-        dst = shard.data_ptr + slot * row_nbytes
+        # DistributedWorker copies require an allocation base. Publish the
+        # complete rank shard after updating one row instead of constructing an
+        # interior device pointer for the selected slot.
+        source = buffers.tail_init_hidden[rank]
         self._shared_l3_worker().copy_to(
-            dst,
-            staged.data_ptr(),
-            row_nbytes,
+            shard.data_ptr,
+            source.data_ptr(),
+            source.numel() * source.element_size(),
             worker_id=rank,
         )
 
@@ -3706,15 +3708,14 @@ class DeepSeekV4ModelRunner(L3DispatchMixin, ModelRunner):
         meta_row[_MTP_STATE_COMMITTED_COUNT] = state.committed_count
         worker = self._shared_l3_worker()
         for device_tensor, source in (
-            (self._materialize_mtp_device_state_tokens(), token_row),
-            (self._materialize_mtp_device_state_meta(), meta_row),
+            (self._materialize_mtp_device_state_tokens(), buffers.state_init_tokens[rank]),
+            (self._materialize_mtp_device_state_meta(), buffers.state_init_meta[rank]),
         ):
             shard = device_tensor.shards[rank]
-            row_nbytes = source.numel() * source.element_size()
             worker.copy_to(
-                shard.data_ptr + slot * row_nbytes,
+                shard.data_ptr,
                 source.data_ptr(),
-                row_nbytes,
+                source.numel() * source.element_size(),
                 worker_id=rank,
             )
         state.device_state_initialized = True
@@ -3958,6 +3959,9 @@ class DeepSeekV4ModelRunner(L3DispatchMixin, ModelRunner):
                 name="mtp_prefill_pre_hc_mirror",
             ),
         )
+        self._mtp_buffers.state_init_tokens.zero_()
+        self._mtp_buffers.state_init_meta.zero_()
+        self._mtp_buffers.tail_init_hidden.zero_()
         # MTP prefill host inputs + device outputs live on the prefill TaskArgs.
         from pypto_serving.model.deepseek.task_args import mtp_prefill_task_args  # noqa: PLC0415
 
