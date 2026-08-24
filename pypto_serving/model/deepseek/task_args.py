@@ -313,7 +313,7 @@ _MTP_DECODE_TENSOR_ORDER = (
     "shared_w3", "shared_w3_scale", "shared_w2", "shared_w2_scale",
     "mtp_hc_head_fn", "mtp_hc_head_scale", "mtp_hc_head_base", "mtp_norm_w",
     "lm_head_weight", "hidden_out", "next_pre_hc_hidden", "logits", "sampled_ids",
-    "logit_row_indices",
+    "logit_row_indices", "moe_token_counts",
 )
 
 # The K=1 fused entry kept the old raw-preamble MTP ABI and adds persistent

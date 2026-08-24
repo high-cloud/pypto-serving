@@ -117,9 +117,13 @@ def _pypto_lib_l3_arg_names(module_name: str, function_name: str) -> tuple[str, 
     return tuple(arg.arg for arg in function.args.args)
 
 def test_deepseek_decode_task_arg_orders_match_pypto_lib_abis():
-    assert _pypto_lib_l3_arg_names("decode_fwd", "l3_decode_fwd") == _DECODE_FWD_TENSOR_ORDER
+    assert _pypto_lib_l3_arg_names("decode_fwd", "l3_decode_fwd") == (
+        *_DECODE_FWD_TENSOR_ORDER,
+        "dump_moe_stats",
+    )
     assert _pypto_lib_l3_arg_names("decode_mtp", "l3_decode_mtp") == (
         *_MTP_DECODE_TENSOR_ORDER,
+        "dump_moe_stats",
         "num_tokens",
     )
 
@@ -133,6 +137,7 @@ def test_deepseek_decode_task_arg_orders_match_pypto_lib_abis():
         "mtp_tail_token_ids",
         "mtp_tail_positions",
         *fused_mtp_only,
+        "dump_moe_stats",
         "mtp_num_tokens",
     )
 
