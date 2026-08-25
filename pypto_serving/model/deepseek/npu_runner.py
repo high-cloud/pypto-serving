@@ -4145,13 +4145,23 @@ class DeepSeekV4ModelRunner(L3DispatchMixin, ModelRunner):
                     compiled,
                     persistent=True,
                     reset_persistent_windows=False,
+                    # PyPTO names copies from these inherited ranges in place. Listing a
+                    # tensor is therefore a caller guarantee that its backing is visible
+                    # across processes and remains valid for the worker lifetime. The
+                    # prepacked sidecar satisfies that contract through its read-only
+                    # MAP_SHARED mapping; torch.is_shared() is false for that external map.
                     inherited_host_tensors=self._inherited_host_weights(),
                 )
             self._l3_worker = worker
         return worker
 
     def _inherited_host_weights(self) -> list[torch.Tensor]:
-        """Return immutable main and MTP weights that must be visible at worker fork."""
+        """Return main and MTP weights whose backing stays visible after worker fork.
+
+        PyPTO uses this list as a cross-process visibility and lifetime guarantee
+        when naming ``copy_to`` sources instead of staging them. Any tensor added
+        here must therefore retain the same shared backing for the worker lifetime.
+        """
         tensors = list(self._stacked_host_weights.values()) if self._stacked_host_weights else []
         global_weights = getattr(self, "_global_weights", None)
         if global_weights is not None:
