@@ -1044,10 +1044,7 @@ def spawn_worker(config: EngineConfig):
     dedicated output queue so they cannot be mistaken for inference results.
     """
     ctx = mp.get_context("spawn")
-    # Commands are already encoded bytes and the engine keeps at most two in
-    # flight. A synchronous queue avoids the multiprocessing.Queue feeder
-    # thread competing with scheduler bookkeeping before the worker is woken.
-    input_queue = ctx.SimpleQueue()
+    input_queue = ctx.Queue()
     output_queue = ctx.Queue()
     profile_output_queue = ctx.Queue()
     ready_event = ctx.Event()
