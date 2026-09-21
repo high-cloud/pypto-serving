@@ -173,3 +173,22 @@ def test_dspark_topology_accepts_the_8_card_and_16_card_worlds():
         )
 
         cli._validate_dspark_topology(args)
+
+
+@pytest.mark.parametrize("requested", [None, "", "diagnostic-output"])
+def test_worker_only_exports_explicit_build_directory(monkeypatch, requested):
+    import os
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from pypto_serving.serving.server.serving_worker import WorkerProcess
+
+    if requested is None:
+        monkeypatch.delenv("PYPTO_PROG_BUILD_DIR", raising=False)
+    else:
+        monkeypatch.setenv("PYPTO_PROG_BUILD_DIR", requested)
+    worker = WorkerProcess.__new__(WorkerProcess)
+    worker.config = SimpleNamespace(dp_rank=2)
+    directory = worker._configure_pypto_build_dir((3, 4))
+    assert directory == (Path(requested) / "serving_dp2_d3_4" if requested else None)
+    assert os.environ.get("PYPTO_PROG_BUILD_DIR") == (str(directory) if requested else requested)

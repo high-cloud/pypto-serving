@@ -50,7 +50,8 @@ Validated constraints (enforced at startup):
 ## Prefix caching
 
 The HCA cache layout changes the prefill/decode kernel ABI. On the first
-launch after upgrading, omit `--use-compile-cache` to regenerate both graphs.
+launch after upgrading, set `PYPTO_CACHE=0` (or unset it) to regenerate both
+graphs.
 
 The seven target cache families use the shared grouped prefix-cache manager.
 Lookup selects the TP partition with the longest reusable prefix, sharing
