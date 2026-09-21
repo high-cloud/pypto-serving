@@ -637,14 +637,14 @@ class DSparkCacheMetadataBuilder:
                 raise ValueError("ring table block IDs must not be negative")
             buckets.setdefault(len(ids), []).append((row, ids))
         for width, rows in buckets.items():
-            row_indices = np.fromiter(
-                (row for row, _ids in rows),
-                dtype=np.intp,
-                count=len(rows),
-            )
-            values = np.asarray([ids for _row, ids in rows], dtype=np.int32)
-            for offset in range(width):
-                table_array[row_indices, offset::width] = values[:, offset, None]
+            repeats, tail = divmod(depth, width)
+            repeated_depth = repeats * width
+            for row, ids in rows:
+                values = np.asarray(ids, dtype=np.int32)
+                if repeats:
+                    table_array[row, :repeated_depth].reshape(repeats, width)[:] = values
+                if tail:
+                    table_array[row, repeated_depth:] = values[:tail]
         return table
 
     @staticmethod
