@@ -15,14 +15,14 @@ python -m pip install 'xgrammar==0.2.7'
 python -m pip show xgrammar
 ```
 
-When upgrading either repository, use a new `PYPTO_PROG_BUILD_DIR` for the changed kernels before enabling `--use-compile-cache`. The compile cache does not validate a previous executable against the new source or positional ABI.
+Serving uses PyPTO's validated persistent JIT cache; there is no cache CLI flag. `PYPTO_CACHE=1` enables reuse and `PYPTO_CACHE_DIR` selects the artifact root. Leave `PYPTO_PROG_BUILD_DIR` unset for reuse, because requesting explicit build output bypasses caching. PyPTO checks source, specialization and toolchain identity before reusing an executable. See [Startup and Build Cache](../cli-reference/pypto-serving.md#startup-and-build-cache) for the required PyPTO revision and cache controls.
 
 ## Start the service
 
-The paths below are deployment choices, not required repository locations. Set the checkpoint and build-cache paths for your environment. The 16 listed devices must be free before starting the server.
+The paths below are deployment choices, not required repository locations. Set the checkpoint and JIT-cache paths for your environment. The 16 listed devices must be free before starting the server.
 
 ```bash
-PYPTO_PROG_BUILD_DIR=/path/to/new-compile-cache \
+PYPTO_CACHE=1 PYPTO_CACHE_DIR=/path/to/shared-jit-cache \
 python -m pypto_serving.cli \
   --model /path/to/dsv4-flash-dspark-w8a8 \
   --served-model-name dsv4-flash-dspark-w8a8 \
@@ -36,10 +36,10 @@ python -m pypto_serving.cli \
   --enable-prefix-caching \
   --ring-heap 2147483648,2147483648,4294967296,8589934592 \
   --generate-config '{"max_new_tokens":2048,"temperature":0}' \
-  --use-compile-cache --host 127.0.0.1 --port 8000
+  --host 127.0.0.1 --port 8000
 ```
 
-Start without `--use-compile-cache` for the first build if your deployment does not use a persistent compile directory. Check `/health` before sending requests:
+PyPTO compiles on a cache miss. Set `PYPTO_CACHE=0` to disable reuse when a fresh build is required. Check `/health` before sending requests:
 
 ```bash
 curl --noproxy '*' http://127.0.0.1:8000/health
@@ -80,8 +80,8 @@ Ordinary batches reuse immutable device-resident all-allowed masks and default d
 
 Constrained requests reuse request-local Host bitmask storage. Draft validation and mask generation share one speculative traversal, then roll back; only committed output advances the grammar. Serving packs the valid prefix and bonus row directly into shared buffers without unpacking vocabulary bits. With asynchronous scheduling enabled, acceptance-independent metadata can prepare early, but mask planning still waits for that request's previous output to be committed. Mutable slot ownership lasts through output reclaim. Constrained masks still use the existing full-tensor runtime upload path; Host row reuse is not partial H2D transfer.
 
-Missing XGrammar, an unsupported schema, or an unsupported model path yields an HTTP 400 before streaming headers are sent. There is no fallback to unconstrained generation for a request that asked for constraints. Request completion and cancellation release request-local grammar state. Recompute preemption of a constrained request is not yet supported; under cache pressure it may wait for resources rather than preempt another constrained request.
+Missing XGrammar, an unsupported schema, or an unsupported model path yields an HTTP 400 before streaming headers are sent. There is no fallback to unconstrained generation for a request that asked for constraints. Request completion and cancellation release request-local grammar state. Recompute preemption of a constrained request is not yet supported. Under cache pressure, it waits while in-flight work can make progress; if no progress is possible, the scheduler explicitly rejects a stalled request and releases its resources.
 
 ## Upgrade and rollback
 
-Roll Serving and PyPTO-Lib forward or backward together, then use a build-cache directory compiled from that pair. After a restart, check health, one constrained tool request, and one ordinary chat request before restoring traffic. Do not reuse a compile cache across the changed kernel ABI or mix the new Serving `TaskArgs` order with old Lib kernels.
+Roll Serving and PyPTO-Lib forward or backward together, then restart workers so PyPTO validates the updated source and toolchain identity. For an isolated rollout, select a new `PYPTO_CACHE_DIR` or set `PYPTO_CACHE=0`; do not load old named build directories manually or mix the new Serving `TaskArgs` order with old Lib kernels. After a restart, check health, one constrained tool request, and one ordinary chat request before restoring traffic.
