@@ -609,6 +609,7 @@ runs:
         # breaks recent transformers imports on this deliberately CPU-only
         # torch install. Torch 2.10 returns None, allowing CPU detection.
         # torch_npu is not needed: KV sizing uses worker device_memory_info.
+        # Keep transformers unpinned; use this CPU torch pin as the CI baseline.
         #
         # The CPU index is not a preference either, so an unreachable one is
         # retried rather than swapped for the default index: the same pin resolves
