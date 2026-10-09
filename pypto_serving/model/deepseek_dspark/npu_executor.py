@@ -194,8 +194,7 @@ class DeepSeekV4DSparkPyptoExecutor(CorePyptoExecutor):
         platform: str = "a2a3sim",
         device_id: int = 0,
         device_ids: Sequence[int] | None = None,
-        pypto_build_dir: str = "build_output",
-        use_compile_cache: bool = False,
+        pypto_build_dir: str | None = None,
         cache_ranks: int = DSPARK_RANKS,
         compile_kernels: bool = False,
         num_speculative_tokens: int = 0,
@@ -206,7 +205,6 @@ class DeepSeekV4DSparkPyptoExecutor(CorePyptoExecutor):
             platform=platform,
             device_ids=worker_device_ids,
             pypto_build_dir=pypto_build_dir,
-            use_compile_cache=use_compile_cache,
         )
         self._kernel_dir = _find_pypto_lib_dspark_dir()
         self._compile_kernels = bool(compile_kernels)
@@ -223,14 +221,14 @@ class DeepSeekV4DSparkPyptoExecutor(CorePyptoExecutor):
                 "model without speculation."
             )
         self._embedding_cache: dict[str, torch.Tensor] = {}
-        compile_cache_dir = self._pypto_build_dir if self._use_compile_cache else None
+        # The persistent JIT cache is resolved by PyPTO through the run config
+        # policy; an explicit build dir stays a diagnostic/output request.
         self._compiler = KernelCompiler(
             run_config=build_pypto_run_config(
                 platform=self._platform,
                 device_ids=self._device_ids,
-                pypto_build_dir=compile_cache_dir,
+                pypto_build_dir=self._pypto_build_dir,
             ),
-            cache_dir=compile_cache_dir,
         )
 
     @property
@@ -491,7 +489,7 @@ class DeepSeekV4DSparkPyptoExecutor(CorePyptoExecutor):
     def _compile_l3_callable(self, name: str, jit_fn: object):
         """Compile one fully annotated DSpark HOST wrapper."""
         with profile_span(f"DeepSeekV4DSparkPyptoExecutor.compile.{name}", cat="executor"):
-            return self._compiler.compile(name, jit_fn, use_cache=self._use_compile_cache)
+            return self._compiler.compile(name, jit_fn)
 
     def _build_rope_tables(
         self,

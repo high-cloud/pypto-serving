@@ -63,18 +63,6 @@ def build_parser() -> argparse.ArgumentParser:
     # Backend and device
     parser.add_argument("--backend", default="npu", choices=sorted(_VALID_BACKENDS), help="Inference backend (default: npu).")
     parser.add_argument("--platform", default="a2a3", help="NPU platform (default: a2a3).")
-    parser.add_argument(
-        "--use-compile-cache",
-        action="store_true",
-        default=False,
-        help=(
-            "Reuse compiled kernels across launches. Each kernel is written to "
-            "<pypto_build_dir>/<name> and reloaded on the next launch, skipping the JIT "
-            "and the device-binary assembly. Off by default. NOTE: there is no "
-            "fingerprinting, so reuse the same build dir only for the same config and "
-            "kernel sources; clear it on a config/kernel change to avoid stale binaries."
-        ),
-    )
     parser.add_argument("--device", type=int, default=0, help="NPU device ID (default: 0).")
     parser.add_argument(
         "--devices",
@@ -291,7 +279,6 @@ def build_serving_engine_config(args: argparse.Namespace) -> EngineConfig:
         raise ValueError(
             "--speculative-config/--num-speculative-tokens is only supported for DeepSeek V4"
         )
-    executor_kwargs["use_compile_cache"] = args.use_compile_cache
     # The DSpark TP4/DP4 axes are internal to the kernels (TP groups hold
     # replicated caches; DP groups are the four scheduler cache partitions).
     # The serving contract is one overlapped worker group of 16 ranks with

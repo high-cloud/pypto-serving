@@ -49,8 +49,7 @@ class PyptoExecutor(ModelExecutor, ABC):
         *,
         platform: str = "a2a3sim",
         device_ids: Sequence[int] = (0,),
-        pypto_build_dir: str = "build_output",
-        use_compile_cache: bool = False,
+        pypto_build_dir: str | None = None,
     ) -> None:
         """Initialize common PyPTO runtime options and model registries."""
         super().__init__(kv_cache_manager)
@@ -59,7 +58,6 @@ class PyptoExecutor(ModelExecutor, ABC):
         if not self._device_ids:
             raise ValueError("device_ids must contain at least one device id")
         self._pypto_build_dir = pypto_build_dir
-        self._use_compile_cache = use_compile_cache
         self._runners: dict[str, ModelRunner] = {}
         self._compiled: dict[str, object] = {}
 

@@ -127,21 +127,17 @@ class Qwen314BPyptoExecutor(CorePyptoExecutor):
         *,
         platform: str = "a2a3sim",
         device_ids: Sequence[int] = (0,),
-        pypto_build_dir: str = "build_output",
-        use_compile_cache: bool = False,
+        pypto_build_dir: str | None = None,
     ) -> None:
-        # ``pypto_build_dir`` is the per-worker build dir (set by the serving
-        # worker). When ``use_compile_cache`` is set, the compiler writes each
-        # kernel straight to ``<pypto_build_dir>/<name>`` and reloads it on a
-        # later launch, so it doubles as the on-disk kernel cache. No
-        # fingerprinting -- the caller must keep this dir config/kernel-source
-        # appropriate. When off, pypto uses its default per-kernel build dirs.
+        # ``pypto_build_dir`` is an explicit diagnostic/output request (set by
+        # the serving worker only when the user asks for build output); it
+        # bypasses PyPTO's JIT cache. The persistent cache policy reaches pypto
+        # through the run config instead.
         super().__init__(
             kv_cache_manager,
             platform=platform,
             device_ids=device_ids,
             pypto_build_dir=pypto_build_dir,
-            use_compile_cache=use_compile_cache,
         )
         self._compiler = KernelCompiler(
             run_config=build_pypto_run_config(
@@ -149,7 +145,6 @@ class Qwen314BPyptoExecutor(CorePyptoExecutor):
                 device_ids=self._device_ids,
                 pypto_build_dir=self._pypto_build_dir,
             ),
-            cache_dir=self._pypto_build_dir,
         )
 
     @property
@@ -338,7 +333,7 @@ class Qwen314BPyptoExecutor(CorePyptoExecutor):
         cache fast-path and the JIT compile are both handled by the shared
         :class:`KernelCompiler`.
         """
-        return self._compiler.compile(name, jit_fn, use_cache=self._use_compile_cache)
+        return self._compiler.compile(name, jit_fn)
 
     @classmethod
     def _stage_stacked_decode_weights(cls, model: RuntimeModel) -> dict[str, torch.Tensor]:

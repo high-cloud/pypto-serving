@@ -52,21 +52,19 @@ def test_qwen_compile_uses_current_distributed_config_interface(monkeypatch):
     assert callable_spec.aicpu_thread_num == 4
 
 
-def test_qwen_compile_threads_use_cache_to_compiler():
-    """_compile_jit_fwd_callable forwards use_compile_cache to the compiler."""
+def test_qwen_compile_threads_delegate_to_compiler():
+    """_compile_jit_fwd_callable compiles through the shared KernelCompiler."""
     captured: dict[str, object] = {}
 
     class _FakeCompiler:
-        def compile(self, name, jit_fn, *, use_cache=False):
+        def compile(self, name, jit_fn):
             captured["name"] = name
-            captured["use_cache"] = use_cache
             return "compiled"
 
-    executor = PyptoExecutor(device_ids=(3,), use_compile_cache=True)
+    executor = PyptoExecutor(device_ids=(3,))
     executor._compiler = _FakeCompiler()
 
     callable_spec = executor._compile_jit_fwd_callable("fake", object())
 
     assert callable_spec == "compiled"
-    assert captured["use_cache"] is True
     assert captured["name"] == "fake"
