@@ -120,10 +120,10 @@ def harness():
         pytest.fail("DEVICE_ID is required")
 
     from pypto_serving.config.types import RuntimeConfig
-    from pypto_serving.model.tokenizer import TransformersTokenizerAdapter
+    from pypto_serving.model.tokenizer import load_tokenizer
     from pypto_serving.serving.engine.async_engine import AsyncLLMEngine, EngineConfig
 
-    tokenizer = TransformersTokenizerAdapter.from_pretrained(str(MODEL_DIR))
+    tokenizer = load_tokenizer(str(MODEL_DIR))
     # Default to no chunking; the chunked-prefill test lowers this per-request.
     default_threshold = MAX_SEQ_LEN
     config = EngineConfig(
@@ -173,8 +173,8 @@ def harness():
     # actually fired, instead of only checking output equality.
     orig_schedule = engine.scheduler.schedule
 
-    def schedule_spy():
-        output = orig_schedule()
+    def schedule_spy(*args, **kwargs):
+        output = orig_schedule(*args, **kwargs)
         if output.scheduled_requests:
             h.schedule_events.append(
                 [
