@@ -1,9 +1,6 @@
 numpy>=2.0
 safetensors
-# transformers >= 5.18 assumes torch.accelerator.current_accelerator() can
-# return None; on the CPU torch builds used by CI it raises during import
-# instead, breaking tokenizer imports at test setup. Cap until compatible.
-transformers<5.18.0
+transformers
 fastapi
 pydantic>=2.0
 uvicorn

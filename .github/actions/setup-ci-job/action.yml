@@ -604,19 +604,19 @@ runs:
         # further down (transformers et al.) depend on torch too, so this must
         # come first for them as well.
         #
-        # Pinned to what the conda env this migration replaces carried, so the
-        # toolchain is the only thing that changes: py310-lib resolved
-        # torch>=2.0.0 to 2.6.0, while an unpinned install takes the newest
-        # (2.13.0 today). torch itself stays a serving dependency (tensors,
-        # dtypes, weights, sampling); torch_npu is no longer installed — the
-        # KV-cache sizing queries the worker's device_memory_info instead.
+        # Match the CPU torch version used by pypto-lib's A5 CI. In torch 2.6,
+        # current_accelerator() raises when no backend is registered, which
+        # breaks recent transformers imports on this deliberately CPU-only
+        # torch install. Torch 2.10 returns None, allowing CPU detection.
+        # torch_npu is not needed: KV sizing uses worker device_memory_info.
+        # Keep transformers unpinned; use this CPU torch pin as the CI baseline.
         #
         # The CPU index is not a preference either, so an unreachable one is
         # retried rather than swapped for the default index: the same pin resolves
         # to a CUDA-bundling wheel there, which is the whole thing this is
         # avoiding. Better to fail naming the index than to quietly install a
         # different build of the version the pin asks for.
-        TORCH_PIN='torch==2.6.0'
+        TORCH_PIN='torch==2.10.0'
         torch_ok=0
         for attempt in 1 2 3; do
           if pip install "$TORCH_PIN" --index-url https://download.pytorch.org/whl/cpu; then
@@ -664,6 +664,8 @@ runs:
         # Runtime requirements are shared with local installs. Keep CPU torch
         # and from-source pypto/simpler under the build steps above.
         pip install --no-deps -e .
+        # Catch tokenizer dependency incompatibilities before borrowing a device.
+        python -c 'from transformers import AutoTokenizer, PreTrainedTokenizerFast; print("tokenizer imports OK")'
 
     - name: Show ccache stats (after)
       shell: bash
