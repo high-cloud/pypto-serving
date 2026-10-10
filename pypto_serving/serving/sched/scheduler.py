@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 
 from pypto_serving.config.types import KVCacheGroupSpec
+from pypto_serving.serving.constraints import ConstraintSpec
 from pypto_serving.serving.memory.kv_cache import KVCacheCapacityError, KvCacheManager
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,7 @@ class Request:
     top_p: float = 1.0
     top_k: int | None = None
     seed: int | None = None
+    constraint_spec: ConstraintSpec | None = None
     cached_block_ids: list[int] = field(default_factory=list)
     allocated_block_ids: list[int] = field(default_factory=list)
     allocated_group_block_ids: dict[str, list[int]] = field(default_factory=dict)
@@ -293,7 +295,7 @@ class Scheduler:
     def has_work(self) -> bool:
         return len(self.running) > 0 or len(self.waiting) > 0
 
-    def schedule(self) -> SchedulerOutput:
+    def schedule(self, *, allow_reject_stalled: bool = True) -> SchedulerOutput:
         output = SchedulerOutput()
         token_budget = self.config.max_num_scheduled_tokens
         grouped_phase = self._grouped_cache_phase()
@@ -302,6 +304,7 @@ class Scheduler:
         scheduled_req_ids: set[str] = set()
         num_scheduled_tokens: dict[str, int] = {}
         running_to_keep: list[Request] = []
+        stalled_constrained: list[Request] = []
         for request in self.running:
             # A request later in this snapshot may have been preempted while
             # scheduling an earlier request. Do not schedule it again from the
@@ -346,6 +349,8 @@ class Scheduler:
                     request, scheduled_req_ids, num_scheduled_tokens, output
                 )
                 if preempted is None:
+                    if request.constraint_spec is not None:
+                        stalled_constrained.append(request)
                     running_to_keep.append(request)
                     continue
                 token_budget += preempted.get("returned_tokens", 0)
@@ -386,6 +391,24 @@ class Scheduler:
             for request in running_to_keep
             if request.status is not RequestStatus.PREEMPTED
         ]
+        if (
+            allow_reject_stalled
+            and stalled_constrained
+            and not output.scheduled_requests
+            and not any(
+                request.num_output_placeholders or request.terminal_prefill_in_flight
+                for request in self.running
+            )
+        ):
+            # No running request can free a block or produce an in-flight result.
+            # Recompute preemption cannot reconstruct a constrained matcher, so
+            # fail one stalled request explicitly instead of spinning forever.
+            victim = stalled_constrained[-1]
+            self.abort_request(victim.request_id)
+            output.rejected_requests[victim.request_id] = (
+                f"Request {victim.request_id} cannot allocate KV blocks; "
+                "constrained recompute preemption is not supported"
+            )
 
         # Keep grouped-cache commands single-phase. Prefill may run in the next
         # scheduler step, after the round-robin selector rotates away from decode.
@@ -992,7 +1015,14 @@ class Scheduler:
         """
         if not self.running:
             return None
-        candidates = [r for r in self.running if r.request_id != exclude.request_id]
+        # The current worker can reconstruct a grammar only from an intact
+        # request lifetime. Serving's recompute preemption does not replay
+        # previously generated tokens into a fresh prefill, so never silently
+        # restart a constrained request at the wrong grammar position.
+        candidates = [
+            r for r in self.running
+            if r.request_id != exclude.request_id and r.constraint_spec is None
+        ]
         if self.kv_cache_manager.has_groups and exclude.cache_partition is not None:
             same_partition = [
                 request

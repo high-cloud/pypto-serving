@@ -71,6 +71,7 @@ def _runner(*, speculative: bool = False, max_position: int = 512) -> DSparkMode
     runner._prefill_task_args.allocate_host_shared(None)
     runner._decode_task_args = [task_args_module.decode_task_args(runner)]
     runner._decode_task_args[0].allocate_host_shared(None)
+    runner._prepare_default_grammar_args()
     if speculative:
         runner._drafter_task_args = task_args_module.drafter_task_args(runner)
         runner._drafter_task_args.allocate_host_shared(None)
@@ -381,7 +382,9 @@ def test_packed_prefill_reads_each_requests_sampled_slot(monkeypatch):
     batch = _packed_prefill_batch()
     batch.allow_device_greedy_sampling = True
     monkeypatch.setattr(runner, "_ensure_l3_shared_buffers", lambda model: None)
-    monkeypatch.setattr(runner, "_prefill_dispatch_args", lambda *args: ())
+    monkeypatch.setattr(
+        runner, "_prefill_dispatch_args", lambda *args: (None,) * len(runner._prefill_task_args.names)
+    )
 
     def dispatch(*args):
         sampled = runner._prefill_task_args.tensors["sampled_ids"]
@@ -487,8 +490,18 @@ def test_dspark_task_arg_orders_match_pypto_lib_abis() -> None:
     assert tuple(arg.arg for arg in decode.args.args) == (
         task_args_module._DECODE_TENSOR_ORDER
     )
-    assert len(task_args_module._PREFILL_TENSOR_ORDER) == 101
-    assert len(task_args_module._DECODE_TENSOR_ORDER) == 109
+    assert len(task_args_module._PREFILL_TENSOR_ORDER) == 102
+    assert len(task_args_module._DECODE_TENSOR_ORDER) == 110
+
+
+def test_fused_dspark_target_args_match_pypto_lib_abi() -> None:
+    """The K7 target prefix includes the mask and capped draft counts."""
+    fused = _pypto_lib_function("decode_fwd_dspark", "l3_decode_fwd_dspark")
+    target = tuple(
+        name for name in task_args_module._FUSED_DECODE_TENSOR_ORDER
+        if name not in runner_module._DSPARK_FUSED_INTERNAL_PREPARE_NAMES
+    )
+    assert tuple(arg.arg for arg in fused.args.args[:len(target)]) == target
 
 
 def test_drafter_and_markov_task_arg_orders_match_pypto_lib_abis() -> None:
