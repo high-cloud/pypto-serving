@@ -239,7 +239,7 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help=("Enable chunked prefill (default: True). Use --no-enable-chunked-prefill to disable. "
-              "V4.1 always disables chunked prefill."),
+              "V4.1 uses the configured prefill capacity for each chunk."),
     )
 
     # Profiling
@@ -439,13 +439,12 @@ def _build_v41_engine_config(args, model_dir, raw, devices):
         profile_config=_build_profile_config(args),
         max_num_running_reqs=args.max_num_seqs,
         max_num_scheduled_tokens=step_tokens,
-        long_prefill_token_threshold=0,
+        long_prefill_token_threshold=args.long_prefill_token_threshold,
         # Prefix restore needs both KV pages and matching compressor state.
         # Pipelining needs independently owned mutable snapshots and tickets.
         enable_prefix_cache=False,
         async_scheduling=False,
-        # The current serving prefill path requires the complete prompt in one dispatch.
-        enable_chunk_prefill=False,
+        enable_chunk_prefill=args.enable_chunked_prefill,
     )
 
 

@@ -2377,9 +2377,9 @@ def make_production_bindings(model_dir, max_seq_len, *, dp_size=8, request_slots
                 pypto_build_dir=options.pypto_build_dir,
             ),
             ring_heap=prefill_ring_heap(prefill_topology.capacity),
-            # DP4's 8K prefill can exhaust ring 2's default dependency pool.
-            ring_dep_pool=((16384, 16384, 32764, 16384)
-                           if topology.dp == 4 else None),
+            # Long prefill scopes can retain more than 16K dependency entries
+            # before their oldest task's scope closes, on either EP topology.
+            ring_dep_pool=(32764, 32764, 32764, 32764),
         )
         compiler = KernelCompiler(run_config=run_config)
         decode, decode_names, decode_counts_are_tensor = compile_decode_fwd(

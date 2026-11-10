@@ -209,3 +209,37 @@ def test_worker_only_exports_explicit_build_directory(monkeypatch, requested):
     directory = worker._configure_pypto_build_dir((3, 4))
     assert directory == (Path(requested) / "serving_dp2_d3_4" if requested else None)
     assert os.environ.get("PYPTO_PROG_BUILD_DIR") == (str(directory) if requested else requested)
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_v41_respects_chunked_prefill_option(tmp_path, monkeypatch, enabled):
+    from types import SimpleNamespace
+
+    from pypto_serving.config.types import KVCacheGroupSpec, KVCacheSpec
+    from pypto_serving.model.deepseek_v41 import encoding, npu_runner, weight_loader
+
+    # Resolve the CLI/scheduler boundary without a checkpoint or device resources.
+    monkeypatch.setattr(encoding.V41TextConfig, "from_dict", lambda raw: SimpleNamespace(
+        max_position_embeddings=131072))
+    group = KVCacheGroupSpec(
+        name="test", layer_indices=(0,), spec=KVCacheSpec(block_size=128, page_size_bytes=1),
+        max_blocks_per_seq=1024, num_partitions=4,
+    )
+    monkeypatch.setattr(npu_runner, "load_composite_bindings", lambda *args, **kwargs: SimpleNamespace(
+        require=lambda *args: None, segment_topology=object(), cache_groups=(group,)))
+    monkeypatch.setattr(weight_loader, "plan_layers", lambda raw: ())
+    args = _parse_cli_args([
+        "--model", str(tmp_path), "--platform", "a5", "--devices", "0,1,2,3",
+        "--tp", "1", "--dp", "4", "--ep", "4", "--block-size", "128",
+        "--max-model-len", "8320", "--max-num-seqs", "8",
+        "--max-num-batched-tokens", "1024", "--long-prefill-token-threshold", "127",
+        *([] if enabled else ["--no-enable-chunked-prefill"]),
+    ])
+    config = cli._build_v41_engine_config(args, str(tmp_path), {}, (0, 1, 2, 3))
+    assert config.enable_chunk_prefill is enabled
+    assert config.long_prefill_token_threshold == 127
+    assert config.max_num_scheduled_tokens == 1024
+    assert config.runtime_config.max_prefill_tokens_per_request == 1024
+    assert config.runtime_config.requires_homogeneous_prefill_decode
+    assert not config.enable_prefix_cache
+    assert not config.async_scheduling
