@@ -457,16 +457,19 @@ class ReplicaEngineCore:
         """
         self._running = False
         await self._drain_loop_task()
+        # Simpler can spend up to 60s reaping the V4.1 chip workers, after
+        # releasing device resources and before unlinking the Host windows.
+        worker_timeout = 90 if self.config.executor_cls == "PyptoDeepSeekV41Executor" else 30
         try:
             if self._cache_tiering is not None:
                 await self._cache_tiering.close()
         except BaseException:
             try:
-                await asyncio.to_thread(self._shutdown_worker, timeout=30)
+                await asyncio.to_thread(self._shutdown_worker, timeout=worker_timeout)
             except Exception:
                 logger.exception("Worker shutdown failed after DDR close failed; mappings remain retained")
             raise
-        reaped = await asyncio.to_thread(self._shutdown_worker, timeout=30)
+        reaped = await asyncio.to_thread(self._shutdown_worker, timeout=worker_timeout)
         if reaped:
             logger.info("ReplicaEngineCore stopped")
         return reaped

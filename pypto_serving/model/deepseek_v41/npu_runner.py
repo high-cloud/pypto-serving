@@ -31,6 +31,7 @@ from types import MappingProxyType
 from typing import Callable
 
 import torch
+from pypto.runtime import StackedDeviceTensor
 
 from pypto_serving.tools.profile import profile_span
 
@@ -2589,6 +2590,31 @@ class PrefillForwardSegment:
         self._owned.clear()
 
 
+class _DSparkProjectionWeights(StackedDeviceTensor):
+    """Resolve the compiler's singleton rank slice to one resident NZ shard."""
+
+    def __init__(self, worker, shards, shape, worker_ids):
+        from pypto.ir.param_info import block_nz_shape
+
+        super().__init__(shards, shape, worker_ids)
+        blocked_shape = tuple(block_nz_shape(shape[1:], self.dtype))
+        self._blocked_views = tuple(
+            worker.view_tensor(shard, blocked_shape, worker_id=rank)
+            for shard, rank in zip(self.shards, self.worker_ids, strict=True)
+        )
+
+    def __getitem__(self, index):
+        if isinstance(index, tuple) and index and isinstance(index[0], slice):
+            rank = index[0]
+            if (type(rank.start) is int and 0 <= rank.start < len(self.shards)
+                    and rank.stop == rank.start + 1 and rank.step in (None, 1)):
+                view = self._blocked_views[rank.start]
+                full_axes = tuple(slice(0, size) for size in view.shape[1:])
+                if index[1:] == full_axes:
+                    return view
+        return super().__getitem__(index)
+
+
 class ResidentDSparkWeights:
     """Upload deferred DSpark weights one EP rank and layer at a time.
 
@@ -2598,8 +2624,6 @@ class ResidentDSparkWeights:
     """
 
     def __init__(self, worker, model_dir, world, *, native_moe=False):
-        from pypto.runtime import StackedDeviceTensor
-
         from .dspark_weights import V41DSparkWeightContract
         from .weight_loader import V41WeightLoader
 
@@ -2623,8 +2647,11 @@ class ResidentDSparkWeights:
                     self._owned.append((rank, shard))
                     self._copy(worker, shard, value, rank)
                     shards.append(shard)
-                self.tensors[name] = StackedDeviceTensor(
-                    tuple(shards), (world, *value.shape), tuple(range(world)))
+                shape, worker_ids = (world, *value.shape), tuple(range(world))
+                if name == "main_proj_weight":
+                    self.tensors[name] = _DSparkProjectionWeights(worker, shards, shape, worker_ids)
+                else:
+                    self.tensors[name] = StackedDeviceTensor(shards, shape, worker_ids)
 
             layer_shapes = {}
             layer_handles = {}
@@ -3297,16 +3324,13 @@ class V41ResidentResources:
             workspace["next_prefill_tokens"][rank, 0] = int(sampled_token_ids[0])
             workspace["sampling_top_ks"].fill_(resources.layout.vocab_size)
             workspace["sampling_top_ps"].fill_(1.0)
-            sampling_params = getattr(batch, "sampling_params", None)
-            if sampling_params:
-                params = (sampling_params.get(request_id) if isinstance(sampling_params, Mapping)
-                          else sampling_params[0])
-                if params is not None:
-                    _stage_sampling(
-                        workspace, rank, slice(0, DSPARK_ROWS_PER_REQUEST), request_id, params,
-                        position=prompt_length + 1, width=DSPARK_ROWS_PER_REQUEST,
-                        vocab_size=resources.layout.vocab_size,
-                    )
+            params = batch.sampling_params.get(request_id)
+            if params is not None:
+                _stage_sampling(
+                    workspace, rank, slice(0, DSPARK_ROWS_PER_REQUEST), request_id, params,
+                    position=prompt_length + 1, width=DSPARK_ROWS_PER_REQUEST,
+                    vocab_size=resources.layout.vocab_size,
+                )
             workspace["prefill_counts"][rank, 0] = retained_count
             workspace["first_query_positions"][rank, 0] = prompt_length
             workspace["prefill_positions"][rank, :retained_count] = torch.arange(

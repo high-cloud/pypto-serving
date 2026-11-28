@@ -35,7 +35,8 @@ _PREFILL_WORKSPACE_KEYS = (
     "prefill_request_ids", "prefill_counts", "context_slots", "context_rope_cos",
     "context_rope_sin", "query_rope_cos", "query_rope_sin", "prefill_target_hidden",
     "zero_sampled", "zero_last_sampled", "draft_head_hidden", "draft_ids",
-    "confidences", "proposal_probs",
+    "confidences", "proposal_probs", "sampling_temperatures", "sampling_top_ks",
+    "sampling_top_ps", "sampling_seeds",
 )
 _DECODE_WORKSPACE_KEYS = (
     "input_ids", "target_positions", "active_widths", "x_hc", "pre_mix",
@@ -44,7 +45,6 @@ _DECODE_WORKSPACE_KEYS = (
     "target_sampled_ids", "accepted_ids", "accepted_counts", "context_valid",
     "context_positions", "num_sampled", "last_sampled", "anchor_ids",
     "sampling_temperatures", "sampling_top_ks", "sampling_top_ps", "sampling_seeds", "sampling_positions",
-    "proposal_probs",
     "first_query_positions", "context_slots", "context_rope_cos", "context_rope_sin",
     "query_rope_cos", "query_rope_sin", "draft_head_hidden", "draft_ids",
     "confidences", "zero_prefill_tokens", "committed",

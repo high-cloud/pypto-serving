@@ -44,7 +44,6 @@ DSPARK_ROPE_HALF = 32
 DSPARK_DRAFT_LAYERS = 3
 DSPARK_PREFILL_SAMPLE_ROWS = 16
 DSPARK_SAMPLED_STRIDE = 8
-DSPARK_QUERY_WIDTH = DSPARK_SPECULATIVE_TOKENS
 _STATE_PROPOSAL_START = 16
 
 _STATE_TOKEN_WIDTH = DSPARK_ROWS_PER_REQUEST
@@ -139,7 +138,7 @@ class DSparkResourceLayout:
     @property
     def state_meta_width(self) -> int:
         """Width of the rejection state, including one probability row per draft step."""
-        return _STATE_PROPOSAL_START + DSPARK_QUERY_WIDTH * self.vocab_size
+        return _STATE_PROPOSAL_START + DSPARK_SPECULATIVE_TOKENS * self.vocab_size
 
     @property
     def state_dtypes(self) -> Mapping[str, torch.dtype]:
@@ -175,7 +174,6 @@ class DSparkResourceLayout:
             "sampling_top_ps": (world, DSPARK_TARGET_ROWS),
             "sampling_seeds": (world, DSPARK_TARGET_ROWS),
             "sampling_positions": (world, DSPARK_TARGET_ROWS),
-            "proposal_probs": (world, batch, DSPARK_QUERY_WIDTH * self.vocab_size),
             "target_hidden_padded": (world, DSPARK_PADDED_ROWS, self.main_hidden_size),
             "target_hidden": (world, DSPARK_TARGET_ROWS, self.main_hidden_size),
             "target_sampled_ids": (world, DSPARK_TARGET_ROWS, DSPARK_SAMPLED_STRIDE),
@@ -219,7 +217,6 @@ class DSparkResourceLayout:
             "x_hc", "pre_mix", "context_rope_cos", "context_rope_sin",
             "query_rope_cos", "query_rope_sin", "confidences",
             "draft_x_hc", "draft_pre_mix", "sampling_temperatures", "sampling_top_ps",
-            "proposal_probs",
         )})
         result.update({name: torch.bfloat16 for name in ("target_hidden_padded", "target_hidden", "draft_head_hidden")})
         expected = set(self.decode_shapes)
@@ -242,6 +239,7 @@ class DSparkResourceLayout:
             "prefill_target_hidden": (world, self.max_prefill_tokens, self.main_hidden_size),
             "zero_sampled": (world, batch),
             "zero_last_sampled": (world, batch),
+            "proposal_probs": (world, batch, DSPARK_SPECULATIVE_TOKENS * self.vocab_size),
         }
 
     @property
@@ -253,6 +251,7 @@ class DSparkResourceLayout:
         result["zero_sampled"] = torch.int32
         result.update({name: torch.int64 for name in ("next_prefill_tokens", "zero_last_sampled")})
         result["prefill_target_hidden"] = torch.bfloat16
+        result["proposal_probs"] = torch.float32
         return result
 
 

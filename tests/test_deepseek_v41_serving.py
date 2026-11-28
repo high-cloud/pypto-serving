@@ -53,44 +53,39 @@ def _prompt(tokenizer, question, max_tokens=1024):
 
 
 def _stop_server(process):
-    """Let the worker finish Simpler teardown before escalating to group kill."""
-    if process.poll() is not None:
-        return
+    """Wait for Simpler teardown and flag forced shutdown or leaked windows."""
+    host_pattern = f"sp-*-h-{process.pid:x}-*"
+    shm_dir = Path("/dev/shm")
+    namespaces = {path.name.split("-", 2)[1] for path in shm_dir.glob(host_pattern)}
+    forced = False
+    if process.poll() is None:
+        with contextlib.suppress(ProcessLookupError):
+            process.send_signal(signal.SIGINT)
     try:
-        # The server shutdown hook sends ShutdownCommand and waits for the
-        # worker's resident resources to close. Simpler may need up to a minute
-        # to reap its chip workers and unlink Host windows.
-        process.send_signal(signal.SIGINT)
-    except ProcessLookupError:
-        return
-    try:
-        process.wait(timeout=60)
+        process.wait(timeout=120)
     except subprocess.TimeoutExpired:
-        # Escalate the server parent first so its shutdown lifecycle gets one
-        # more chance to run. Killing the whole process group here can strand
-        # named Host windows before Simpler reaches its unlink phase.
-        with contextlib.suppress(OSError):
-            os.kill(process.pid, signal.SIGTERM)
-        try:
-            process.wait(timeout=20)
-        except subprocess.TimeoutExpired:
-            with contextlib.suppress(OSError):
-                os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=10)
-    except OSError:
-        return
+        forced = True
 
-    # Uvicorn can exit after the parent shutdown hook while a descendant is
-    # still unwinding. Give that child a short grace period before group kill.
     deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
+    while True:
         try:
             os.killpg(process.pid, 0)
-        except OSError:
-            return
+        except ProcessLookupError:
+            break
+        if forced or time.monotonic() >= deadline:
+            forced = True
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=10)
+            break
         time.sleep(0.2)
-    with contextlib.suppress(OSError):
-        os.killpg(process.pid, signal.SIGKILL)
+
+    residuals = {path.name for path in shm_dir.glob(host_pattern)}
+    residuals.update(path.name for token in namespaces for path in shm_dir.glob(f"sp-{token}-*"))
+    print(f"V4.1 shutdown exit={process.returncode} forced={forced} shm_residuals={sorted(residuals)}",
+          flush=True)
+    if forced or residuals:
+        raise RuntimeError(f"V4.1 shutdown incomplete: forced={forced}, shm_residuals={sorted(residuals)}")
 
 
 @pytest.mark.parametrize("num_speculative_tokens", [0, 5], ids=["k0", "k5"])
@@ -272,9 +267,11 @@ def test_v41_dp4_http_answer(tmp_path, num_speculative_tokens):
             assert any(record["kind"] == "reset" for record in records), records
             print("PREFIX_PAGE_GUARD", json.dumps(records), flush=True)
         finally:
-            _stop_server(process)
-            print("\n--- V4.1 server log (tail) ---", flush=True)
-            print(log_path.read_text(encoding="utf-8", errors="replace")[-20000:], flush=True)
+            try:
+                _stop_server(process)
+            finally:
+                print("\n--- V4.1 server log (tail) ---", flush=True)
+                print(log_path.read_text(encoding="utf-8", errors="replace")[-20000:], flush=True)
 
     if num_speculative_tokens:
         assert any(
