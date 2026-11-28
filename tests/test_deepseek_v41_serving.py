@@ -8,6 +8,7 @@
 # -----------------------------------------------------------------------------------------------------------
 """Four-device V4.1 HTTP answer smoke test."""
 
+import contextlib
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
@@ -52,14 +53,44 @@ def _prompt(tokenizer, question, max_tokens=1024):
 
 
 def _stop_server(process):
+    """Let the worker finish Simpler teardown before escalating to group kill."""
     if process.poll() is not None:
         return
-    process.send_signal(signal.SIGINT)
     try:
-        process.wait(timeout=30)
+        # The server shutdown hook sends ShutdownCommand and waits for the
+        # worker's resident resources to close. Simpler may need up to a minute
+        # to reap its chip workers and unlink Host windows.
+        process.send_signal(signal.SIGINT)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=60)
     except subprocess.TimeoutExpired:
+        # Escalate the server parent first so its shutdown lifecycle gets one
+        # more chance to run. Killing the whole process group here can strand
+        # named Host windows before Simpler reaches its unlink phase.
+        with contextlib.suppress(OSError):
+            os.kill(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(OSError):
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=10)
+    except OSError:
+        return
+
+    # Uvicorn can exit after the parent shutdown hook while a descendant is
+    # still unwinding. Give that child a short grace period before group kill.
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(process.pid, 0)
+        except OSError:
+            return
+        time.sleep(0.2)
+    with contextlib.suppress(OSError):
         os.killpg(process.pid, signal.SIGKILL)
-        process.wait(timeout=10)
 
 
 @pytest.mark.parametrize("num_speculative_tokens", [0, 5], ids=["k0", "k5"])

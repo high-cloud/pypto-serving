@@ -3295,6 +3295,18 @@ class V41ResidentResources:
             workspace["position_limits"][rank, 0] = resources.layout.max_seq_len
             workspace["sampled_rows"][rank, 0] = 0
             workspace["next_prefill_tokens"][rank, 0] = int(sampled_token_ids[0])
+            workspace["sampling_top_ks"].fill_(resources.layout.vocab_size)
+            workspace["sampling_top_ps"].fill_(1.0)
+            sampling_params = getattr(batch, "sampling_params", None)
+            if sampling_params:
+                params = (sampling_params.get(request_id) if isinstance(sampling_params, Mapping)
+                          else sampling_params[0])
+                if params is not None:
+                    _stage_sampling(
+                        workspace, rank, slice(0, DSPARK_ROWS_PER_REQUEST), request_id, params,
+                        position=prompt_length + 1, width=DSPARK_ROWS_PER_REQUEST,
+                        vocab_size=resources.layout.vocab_size,
+                    )
             workspace["prefill_counts"][rank, 0] = retained_count
             workspace["first_query_positions"][rank, 0] = prompt_length
             workspace["prefill_positions"][rank, :retained_count] = torch.arange(

@@ -44,9 +44,10 @@ DSPARK_ROPE_HALF = 32
 DSPARK_DRAFT_LAYERS = 3
 DSPARK_PREFILL_SAMPLE_ROWS = 16
 DSPARK_SAMPLED_STRIDE = 8
+DSPARK_QUERY_WIDTH = DSPARK_SPECULATIVE_TOKENS
+_STATE_PROPOSAL_START = 16
 
 _STATE_TOKEN_WIDTH = DSPARK_ROWS_PER_REQUEST
-_STATE_META_WIDTH = 6
 _STATE_VALID = 0
 _STATE_GENERATION = 1
 
@@ -84,7 +85,8 @@ _DRAFT_DYNAMIC_KEYS = frozenset({
 })
 _MARKOV_DYNAMIC_KEYS = frozenset({
     "head_hidden", "num_sampled", "last_sampled", "next_prefill_tokens", "anchor_ids",
-    "draft_x_hc", "draft_pre_mix",
+    "draft_x_hc", "draft_pre_mix", "temperatures", "top_ks", "top_ps", "seeds",
+    "first_positions", "proposal_probs",
     "draft_ids", "confidences", "logits_epoch",
 })
 
@@ -131,8 +133,13 @@ class DSparkResourceLayout:
             "slot_ids": (self.dp_size, DSPARK_MAX_BATCH_PER_DP),
             "generations": (self.dp_size, DSPARK_MAX_BATCH_PER_DP),
             "state_tokens": (self.dp_size, DSPARK_MAX_BATCH_PER_DP, _STATE_TOKEN_WIDTH),
-            "state_meta": (self.dp_size, DSPARK_MAX_BATCH_PER_DP, _STATE_META_WIDTH),
+            "state_meta": (self.dp_size, DSPARK_MAX_BATCH_PER_DP, self.state_meta_width),
         }
+
+    @property
+    def state_meta_width(self) -> int:
+        """Width of the rejection state, including one probability row per draft step."""
+        return _STATE_PROPOSAL_START + DSPARK_QUERY_WIDTH * self.vocab_size
 
     @property
     def state_dtypes(self) -> Mapping[str, torch.dtype]:
@@ -168,6 +175,7 @@ class DSparkResourceLayout:
             "sampling_top_ps": (world, DSPARK_TARGET_ROWS),
             "sampling_seeds": (world, DSPARK_TARGET_ROWS),
             "sampling_positions": (world, DSPARK_TARGET_ROWS),
+            "proposal_probs": (world, batch, DSPARK_QUERY_WIDTH * self.vocab_size),
             "target_hidden_padded": (world, DSPARK_PADDED_ROWS, self.main_hidden_size),
             "target_hidden": (world, DSPARK_TARGET_ROWS, self.main_hidden_size),
             "target_sampled_ids": (world, DSPARK_TARGET_ROWS, DSPARK_SAMPLED_STRIDE),
@@ -211,6 +219,7 @@ class DSparkResourceLayout:
             "x_hc", "pre_mix", "context_rope_cos", "context_rope_sin",
             "query_rope_cos", "query_rope_sin", "confidences",
             "draft_x_hc", "draft_pre_mix", "sampling_temperatures", "sampling_top_ps",
+            "proposal_probs",
         )})
         result.update({name: torch.bfloat16 for name in ("target_hidden_padded", "target_hidden", "draft_head_hidden")})
         expected = set(self.decode_shapes)
