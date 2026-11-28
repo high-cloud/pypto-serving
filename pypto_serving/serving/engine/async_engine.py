@@ -74,6 +74,7 @@ logger = logging.getLogger(__name__)
 # has already been delivered.
 WORKER_TERM_GRACE_SECONDS = 10.0
 WORKER_KILL_GRACE_SECONDS = 5.0
+WORKER_SHUTDOWN_TIMEOUT_SECONDS = 90.0
 # How long to give the engine loop to notice it is stopping before the worker is
 # reaped without it. Clearing _running does not interrupt a pending read, and the
 # loop usually sits in a worker read governed by SERVING_WORKER_STEP_TIMEOUT --
@@ -457,19 +458,18 @@ class ReplicaEngineCore:
         """
         self._running = False
         await self._drain_loop_task()
-        # Simpler can spend up to 60s reaping the V4.1 chip workers, after
-        # releasing device resources and before unlinking the Host windows.
-        worker_timeout = 90 if self.config.executor_cls == "PyptoDeepSeekV41Executor" else 30
         try:
             if self._cache_tiering is not None:
                 await self._cache_tiering.close()
         except BaseException:
             try:
-                await asyncio.to_thread(self._shutdown_worker, timeout=worker_timeout)
+                await asyncio.to_thread(self._shutdown_worker, timeout=WORKER_SHUTDOWN_TIMEOUT_SECONDS)
             except Exception:
                 logger.exception("Worker shutdown failed after DDR close failed; mappings remain retained")
             raise
-        reaped = await asyncio.to_thread(self._shutdown_worker, timeout=worker_timeout)
+        reaped = await asyncio.to_thread(
+            self._shutdown_worker, timeout=WORKER_SHUTDOWN_TIMEOUT_SECONDS,
+        )
         if reaped:
             logger.info("ReplicaEngineCore stopped")
         return reaped
@@ -1633,11 +1633,19 @@ class ReplicaEngineCore:
             if self._reap(process, timeout):
                 return True
 
+        logger.warning(
+            "Worker shutdown escalated to SIGTERM after cooperative shutdown exceeded %.1fs",
+            timeout,
+        )
         with contextlib.suppress(Exception):
             process.terminate()
         if self._reap(process, WORKER_TERM_GRACE_SECONDS):
             return True
 
+        logger.warning(
+            "Worker shutdown escalated to SIGKILL after SIGTERM exceeded %.1fs",
+            WORKER_TERM_GRACE_SECONDS,
+        )
         with contextlib.suppress(Exception):
             process.kill()
         if self._reap(process, WORKER_KILL_GRACE_SECONDS):

@@ -293,4 +293,4 @@ def test_ddr_close_error_still_shuts_worker_and_preserves_original(secondary):
     core._shutdown_worker = shutdown
     with pytest.raises(RuntimeError, match="DDR drain failed"):
         asyncio.run(core.stop())
-    assert calls == [{"timeout": 30}]
+    assert calls == [{"timeout": 90.0}]

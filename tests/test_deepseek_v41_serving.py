@@ -52,7 +52,7 @@ def _prompt(tokenizer, question, max_tokens=1024):
     return content
 
 
-def _stop_server(process):
+def _stop_server(process, log_path):
     """Wait for Simpler teardown and flag forced shutdown or leaked windows."""
     host_pattern = f"sp-*-h-{process.pid:x}-*"
     shm_dir = Path("/dev/shm")
@@ -82,10 +82,16 @@ def _stop_server(process):
 
     residuals = {path.name for path in shm_dir.glob(host_pattern)}
     residuals.update(path.name for token in namespaces for path in shm_dir.glob(f"sp-{token}-*"))
-    print(f"V4.1 shutdown exit={process.returncode} forced={forced} shm_residuals={sorted(residuals)}",
+    log_text = log_path.read_text(encoding="utf-8", errors="replace")
+    escalated = "Worker shutdown escalated to SIG" in log_text
+    print(f"V4.1 shutdown exit={process.returncode} forced={forced} "
+          f"escalated={escalated} shm_residuals={sorted(residuals)}",
           flush=True)
-    if forced or residuals:
-        raise RuntimeError(f"V4.1 shutdown incomplete: forced={forced}, shm_residuals={sorted(residuals)}")
+    if forced or escalated or residuals:
+        raise RuntimeError(
+            f"V4.1 shutdown incomplete: forced={forced}, escalated={escalated}, "
+            f"shm_residuals={sorted(residuals)}"
+        )
 
 
 @pytest.mark.parametrize("num_speculative_tokens", [0, 5], ids=["k0", "k5"])
@@ -268,7 +274,7 @@ def test_v41_dp4_http_answer(tmp_path, num_speculative_tokens):
             print("PREFIX_PAGE_GUARD", json.dumps(records), flush=True)
         finally:
             try:
-                _stop_server(process)
+                _stop_server(process, log_path)
             finally:
                 print("\n--- V4.1 server log (tail) ---", flush=True)
                 print(log_path.read_text(encoding="utf-8", errors="replace")[-20000:], flush=True)
